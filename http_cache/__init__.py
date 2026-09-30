@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 __all__ = ["cached_get"]
