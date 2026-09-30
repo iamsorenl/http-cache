@@ -1,12 +1,13 @@
 """Disk-cached HTTP GET, stdlib only."""
 import json
+import socket
 import os
 import tempfile
 import time
 import urllib.error
 import urllib.request
 
-__all__ = ["cached_get"]
+__all__ = ["cached_get", "get_with_retry"]
 
 
 def _decode(raw, kind):
@@ -61,3 +62,29 @@ def cached_get(url, cache_path, *, kind="json", sleep=0.2, timeout=30,
     if sleep:
         time.sleep(sleep)
     return data
+
+
+def get_with_retry(url, *, retries=3, backoff=1.0, max_delay=8.0, timeout=30,
+                   headers=None):
+    """GET url and return the body as bytes, retrying transient failures.
+
+    Retries on 429, 5xx, timeouts and connection errors, up to `retries`
+    extra attempts. Waits backoff * 2**attempt seconds,
+    or the server's Retry-After seconds, both capped at max_delay. Other 4xx raise
+    urllib.error.HTTPError at once.
+    """
+    req = urllib.request.Request(url, headers=dict(headers or {}))
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            if attempt == retries or not (e.code == 429 or 500 <= e.code < 600):
+                raise
+            after = e.headers.get("Retry-After", "")
+            delay = float(after) if after.isdigit() else backoff * 2 ** attempt
+        except (urllib.error.URLError, socket.timeout, ConnectionError):
+            if attempt == retries:
+                raise
+            delay = backoff * 2 ** attempt
+        time.sleep(min(delay, max_delay))
